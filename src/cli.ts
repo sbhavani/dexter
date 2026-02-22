@@ -163,7 +163,7 @@ function renderHistory(chatLog: ChatLogComponent, history: AgentRunnerController
   }
 }
 
-export async function runCli() {
+export async function runCli(sessionId: string | null = null) {
   const tui = new TUI(new ProcessTerminal());
   const root = new Container();
   const chatLog = new ChatLogComponent(tui);
@@ -180,7 +180,10 @@ export async function runCli() {
     intro.setModel(modelSelection.model);
     renderSelectionOverlay();
     tui.requestRender();
-  });
+  }, sessionId);
+
+  // Initialize chat history (load session if applicable)
+  await modelSelection.initChatHistory();
 
   const agentRunner = new AgentRunnerController(
     { model: modelSelection.model, modelProvider: modelSelection.provider, maxIterations: 10 },

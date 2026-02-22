@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { callLlm, DEFAULT_MODEL } from '../model/llm.js';
 import { z } from 'zod';
+import { loadSession, saveSession } from './session-storage.js';
 
 /**
  * Represents a single conversation turn (query + answer + summary)
@@ -34,14 +35,49 @@ Return only message IDs that contain information directly useful for answering t
 /**
  * Manages in-memory conversation history for multi-turn conversations.
  * Stores user queries, final answers, and LLM-generated summaries.
+ * Supports session persistence when a sessionId is provided.
  */
 export class InMemoryChatHistory {
   private messages: Message[] = [];
   private model: string;
   private relevantMessagesByQuery: Map<string, Message[]> = new Map();
+  private sessionId: string | null = null;
+  private loaded = false;
 
-  constructor(model: string = DEFAULT_MODEL) {
+  constructor(model: string = DEFAULT_MODEL, sessionId: string | null = null) {
     this.model = model;
+    this.sessionId = sessionId;
+  }
+
+  /**
+   * Loads session data from disk if session ID was provided
+   */
+  async init(): Promise<void> {
+    if (this.loaded || !this.sessionId) {
+      this.loaded = true;
+      return;
+    }
+
+    const loadedMessages = await loadSession(this.sessionId);
+    if (loadedMessages) {
+      this.messages = loadedMessages;
+      // Re-index messages to ensure correct IDs
+      this.messages.forEach((msg, idx) => {
+        msg.id = idx;
+      });
+    }
+    this.loaded = true;
+  }
+
+  /**
+   * Saves session data to disk if session ID was provided
+   */
+  async persist(): Promise<void> {
+    if (!this.sessionId) {
+      return;
+    }
+
+    await saveSession(this.sessionId, this.messages);
   }
 
   /**
@@ -84,8 +120,9 @@ Generate a brief 1-2 sentence summary of this answer.`;
   /**
    * Saves a new user query to history immediately (before answer is available).
    * Answer and summary are null until saveAnswer() is called with the answer.
+   * Auto-persists if session ID is set.
    */
-  saveUserQuery(query: string): void {
+  async saveUserQuery(query: string): Promise<void> {
     // Clear the relevance cache since message history has changed
     this.relevantMessagesByQuery.clear();
 
@@ -95,11 +132,15 @@ Generate a brief 1-2 sentence summary of this answer.`;
       answer: null,
       summary: null,
     });
+
+    // Auto-persist after saving query
+    await this.persist();
   }
 
   /**
    * Saves the answer to the most recent message and generates a summary.
    * Should be called when the agent completes answering.
+   * Auto-persists if session ID is set.
    */
   async saveAnswer(answer: string): Promise<void> {
     const lastMessage = this.messages[this.messages.length - 1];
@@ -109,6 +150,16 @@ Generate a brief 1-2 sentence summary of this answer.`;
 
     lastMessage.answer = answer;
     lastMessage.summary = await this.generateSummary(lastMessage.query, answer);
+
+    // Auto-persist after saving answer
+    await this.persist();
+  }
+
+  /**
+   * Returns the session ID if set
+   */
+  getSessionId(): string | null {
+    return this.sessionId;
   }
 
   /**
