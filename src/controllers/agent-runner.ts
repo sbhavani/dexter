@@ -106,7 +106,7 @@ export class AgentRunnerController {
       startTime,
     };
     this.historyValue = [...this.historyValue, item];
-    this.inMemoryChatHistory.saveUserQuery(query);
+    await this.inMemoryChatHistory.saveUserQuery(query);
     this.errorValue = null;
     this.workingStateValue = { status: 'thinking' };
     this.emitChange();

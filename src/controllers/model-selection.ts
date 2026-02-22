@@ -41,16 +41,23 @@ export class ModelSelectionController {
   private pendingSelectedModelId: string | null = null;
   private readonly onError: (message: string) => void;
   private readonly onChange?: ChangeListener;
-  private readonly chatHistory = new InMemoryChatHistory(DEFAULT_MODEL);
+  private readonly chatHistory: InMemoryChatHistory;
 
-  constructor(onError: (message: string) => void, onChange?: ChangeListener) {
+  constructor(onError: (message: string) => void, onChange?: ChangeListener, sessionId: string | null = null) {
     this.onError = onError;
     this.onChange = onChange;
     this.providerValue = getSetting('provider', DEFAULT_PROVIDER);
     const savedModel = getSetting('modelId', null) as string | null;
     this.modelValue =
       savedModel ?? getDefaultModelForProvider(this.providerValue) ?? DEFAULT_MODEL;
-    this.chatHistory.setModel(this.modelValue);
+    this.chatHistory = new InMemoryChatHistory(this.modelValue, sessionId);
+  }
+
+  /**
+   * Initializes the chat history (loads session if applicable)
+   */
+  async initChatHistory(): Promise<void> {
+    await this.chatHistory.init();
   }
 
   get state(): ModelSelectionState {
