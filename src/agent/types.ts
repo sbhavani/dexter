@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 /**
  * User's response to a tool approval prompt.
  * - 'allow-once': approve this single invocation
@@ -180,3 +182,45 @@ export interface DisplayEvent {
   endEvent?: AgentEvent;
   progressMessage?: string;
 }
+
+// ============================================================================
+// JSON Output Mode — Schemas & Types
+// ============================================================================
+
+export const TokenUsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+});
+
+export const ToolCallRecordSchema = z.object({
+  tool: z.string().min(1),
+  args: z.record(z.string(), z.unknown()),
+  result: z.string(),
+});
+
+export const JsonSuccessOutputSchema = z.object({
+  success: z.literal(true),
+  query: z.string().min(1),
+  answer: z.string().min(1),
+  model: z.string().min(1),
+  toolCalls: z.array(ToolCallRecordSchema),
+  iterations: z.number().int().positive(),
+  duration: z.number().nonnegative(),
+  tokenUsage: TokenUsageSchema.optional(),
+});
+
+export const JsonErrorOutputSchema = z.object({
+  success: z.literal(false),
+  query: z.string(),
+  error: z.string().min(1),
+});
+
+export const JsonOutputSchema = z.discriminatedUnion('success', [
+  JsonSuccessOutputSchema,
+  JsonErrorOutputSchema,
+]);
+
+export type JsonSuccessOutput = z.infer<typeof JsonSuccessOutputSchema>;
+export type JsonErrorOutput = z.infer<typeof JsonErrorOutputSchema>;
+export type JsonOutput = z.infer<typeof JsonOutputSchema>;
