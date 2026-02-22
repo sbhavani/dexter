@@ -467,6 +467,13 @@ export class Scratchpad {
    * Check if a skill has already been executed in this query.
    * Used for deduplication - each skill should only run once per query.
    */
+  /**
+   * Get the file path of this scratchpad's JSONL log file.
+   */
+  getFilePath(): string {
+    return this.filepath;
+  }
+
   hasExecutedSkill(skillName: string): boolean {
     return this.readEntries().some(
       e => e.type === 'tool_result' && e.toolName === 'skill' && e.args?.skill === skillName
