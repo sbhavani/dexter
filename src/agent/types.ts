@@ -22,6 +22,8 @@ export interface AgentConfig {
   requestToolApproval?: (request: { tool: string; args: Record<string, unknown> }) => Promise<ApprovalDecision>;
   /** Shared set of tool names that have been session-approved (persists across queries) */
   sessionApprovedTools?: Set<string>;
+  /** Enable token-by-token streaming to terminal using ANSI escape codes */
+  streamTokens?: boolean;
 }
 
 /**
@@ -35,6 +37,19 @@ export interface Message {
 // ============================================================================
 // Agent Events (for real-time streaming UI)
 // ============================================================================
+
+/**
+ * Token-by-token streaming event for real-time output
+ */
+export interface TokenStreamEvent {
+  type: 'token_stream';
+  /** The token (single character, word, or chunk) */
+  token: string;
+  /** Streaming mode: thinking, tool, answer, or tool_result */
+  mode: 'thinking' | 'tool' | 'answer' | 'tool_result';
+  /** Whether this is the final token */
+  done?: boolean;
+}
 
 /**
  * Agent is processing/thinking
@@ -157,6 +172,7 @@ export interface DoneEvent {
  * Union type for all agent events
  */
 export type AgentEvent =
+  | TokenStreamEvent
   | ThinkingEvent
   | ToolStartEvent
   | ToolProgressEvent

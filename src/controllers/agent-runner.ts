@@ -5,9 +5,11 @@ import type {
   AgentEvent,
   ApprovalDecision,
   DoneEvent,
+  TokenStreamEvent,
 } from '../agent/index.js';
 import type { DisplayEvent } from '../agent/types.js';
 import type { HistoryItem, HistoryItemStatus, WorkingState } from '../types.js';
+import { StreamingOutput, Ansi, streamManager } from '../utils/streaming-output.js';
 
 type ChangeListener = () => void;
 
@@ -26,6 +28,7 @@ export class AgentRunnerController {
   private abortController: AbortController | null = null;
   private approvalResolve: ((decision: ApprovalDecision) => void) | null = null;
   private sessionApprovedTools = new Set<string>();
+  private streamingOutput: StreamingOutput | null = null;
 
   constructor(
     agentConfig: AgentConfig,
@@ -111,25 +114,58 @@ export class AgentRunnerController {
     this.workingStateValue = { status: 'thinking' };
     this.emitChange();
 
+    // Check if streaming is enabled via environment variable
+    const streamTokens = process.env.STREAM_TOKENS === 'true';
+
     try {
       const agent = await Agent.create({
         ...this.agentConfig,
         signal: this.abortController.signal,
         requestToolApproval: this.requestToolApproval,
         sessionApprovedTools: this.sessionApprovedTools,
+        streamTokens,
       });
+
+      // Initialize streaming output if enabled
+      if (streamTokens) {
+        this.streamingOutput = new StreamingOutput('answer');
+        this.streamingOutput.start();
+      }
+
       const stream = agent.run(query, this.inMemoryChatHistory);
       for await (const event of stream) {
+        // Handle token streaming
+        if (event.type === 'token_stream') {
+          const tokenEvent = event as TokenStreamEvent;
+          if (this.streamingOutput) {
+            await this.streamingOutput.write(tokenEvent.token);
+          }
+          continue;
+        }
+
         if (event.type === 'done') {
           finalAnswer = (event as DoneEvent).answer;
         }
         await this.handleEvent(event);
       }
+
+      // End streaming output
+      if (this.streamingOutput) {
+        this.streamingOutput.end();
+        this.streamingOutput = null;
+      }
+
       if (finalAnswer) {
         return { answer: finalAnswer };
       }
       return undefined;
     } catch (error) {
+      // End streaming output on error
+      if (this.streamingOutput) {
+        this.streamingOutput.end();
+        this.streamingOutput = null;
+      }
+
       if (error instanceof Error && error.name === 'AbortError') {
         this.markLastProcessing('interrupted');
         this.workingStateValue = { status: 'idle' };

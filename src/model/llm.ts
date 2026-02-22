@@ -146,6 +146,18 @@ export interface LlmResult {
   usage?: TokenUsage;
 }
 
+/**
+ * Streaming LLM result with token callback
+ */
+export interface LlmStreamResult {
+  response: AIMessage | string;
+  usage?: TokenUsage;
+  /**
+   * Callback for each token as it's streamed
+   */
+  onToken?: (token: string) => void;
+}
+
 function extractUsage(result: unknown): TokenUsage | undefined {
   if (!result || typeof result !== 'object') return undefined;
   const msg = result as Record<string, unknown>;
@@ -234,4 +246,101 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
     return { response: (result as { content: string }).content, usage };
   }
   return { response: result as AIMessage, usage };
+}
+
+interface CallLlmStreamOptions extends CallLlmOptions {
+  /** Callback for each token as it's streamed */
+  onToken?: (token: string) => void;
+}
+
+/**
+ * Streaming result from the LLM
+ */
+export interface StreamToken {
+  /** The token content */
+  token: string;
+  /** Whether this is the final token */
+  done: boolean;
+  /** Token usage */
+  usage?: TokenUsage;
+}
+
+/**
+ * Call the LLM with streaming support.
+ * Yields tokens as they arrive, then returns the final result.
+ */
+export async function* callLlmStream(
+  prompt: string,
+  options: CallLlmStreamOptions = {}
+): AsyncGenerator<StreamToken, LlmResult> {
+  const { model = DEFAULT_MODEL, systemPrompt, outputSchema, tools, signal, onToken } = options;
+  const finalSystemPrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
+
+  // Use streaming mode
+  const llm = getChatModel(model, true);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let runnable: Runnable<any, any> = llm;
+
+  if (outputSchema) {
+    runnable = llm.withStructuredOutput(outputSchema, { strict: false });
+  } else if (tools && tools.length > 0 && llm.bindTools) {
+    runnable = llm.bindTools(tools);
+  }
+
+  const invokeOpts = signal ? { signal } : undefined;
+  const provider = resolveProvider(model);
+
+  let accumulatedContent = '';
+  let usage: TokenUsage | undefined;
+
+  if (provider.id === 'anthropic') {
+    // Anthropic streaming
+    const messages = buildAnthropicMessages(finalSystemPrompt, prompt);
+    const stream = await withRetry(
+      () => runnable.stream(messages, invokeOpts),
+      provider.displayName
+    );
+
+    for await (const chunk of stream) {
+      if (chunk.content) {
+        const content = typeof chunk.content === 'string' ? chunk.content : '';
+        accumulatedContent += content;
+        if (onToken) {
+          onToken(content);
+        }
+        yield { token: content, done: false };
+      }
+    }
+
+    usage = extractUsage(accumulatedContent);
+  } else {
+    // OpenAI/Gemini/Ollama streaming
+    const promptTemplate = ChatPromptTemplate.fromMessages([
+      ['system', finalSystemPrompt],
+      ['user', '{prompt}'],
+    ]);
+    const chain = promptTemplate.pipe(runnable);
+
+    const stream = await withRetry(
+      () => chain.stream({ prompt }, invokeOpts),
+      provider.displayName
+    );
+
+    for await (const chunk of stream) {
+      if (chunk.content) {
+        const content = typeof chunk.content === 'string' ? chunk.content : '';
+        accumulatedContent += content;
+        if (onToken) {
+          onToken(content);
+        }
+        yield { token: content, done: false };
+      }
+    }
+
+    usage = extractUsage(accumulatedContent);
+  }
+
+  // Return the final result
+  return { response: accumulatedContent, usage };
 }

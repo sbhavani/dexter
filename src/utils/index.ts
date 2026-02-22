@@ -17,3 +17,5 @@ export type { CursorContext } from './input-key-handlers.js';
 export { getToolDescription } from './tool-description.js';
 export { transformMarkdownTables, formatResponse } from './markdown-table.js';
 export { estimateTokens, TOKEN_BUDGET } from './tokens.js';
+export { StreamingOutput, Ansi, streamManager, createStream, streamText } from './streaming-output.js';
+export { IS_TTY, getColumns, getRows, cursorLeft, cursorForward, cursorBackward, cursorSave, cursorRestore, clearLine, clearScreen } from './tty.js';

@@ -1,12 +1,12 @@
 import { AIMessage } from '@langchain/core/messages';
 import { StructuredToolInterface } from '@langchain/core/tools';
-import { callLlm } from '../model/llm.js';
+import { callLlm, callLlmStream, type StreamToken } from '../model/llm.js';
 import { getTools } from '../tools/registry.js';
 import { buildSystemPrompt, buildIterationPrompt, buildFinalAnswerPrompt } from '../agent/prompts.js';
 import { extractTextContent, hasToolCalls } from '../utils/ai-message.js';
 import { InMemoryChatHistory } from '../utils/in-memory-chat-history.js';
 import { estimateTokens, CONTEXT_THRESHOLD, KEEP_TOOL_USES } from '../utils/tokens.js';
-import type { AgentConfig, AgentEvent, ContextClearedEvent, TokenUsage } from '../agent/types.js';
+import type { AgentConfig, AgentEvent, ContextClearedEvent, TokenUsage, TokenStreamEvent } from '../agent/types.js';
 import { createRunContext, type RunContext } from './run-context.js';
 import { buildFinalAnswerContext } from './final-answer-context.js';
 import { AgentToolExecutor } from './tool-executor.js';
@@ -26,6 +26,7 @@ export class Agent {
   private readonly toolExecutor: AgentToolExecutor;
   private readonly systemPrompt: string;
   private readonly signal?: AbortSignal;
+  private readonly streamTokens: boolean;
 
   private constructor(
     config: AgentConfig,
@@ -39,6 +40,7 @@ export class Agent {
     this.toolExecutor = new AgentToolExecutor(this.toolMap, config.signal, config.requestToolApproval, config.sessionApprovedTools);
     this.systemPrompt = systemPrompt;
     this.signal = config.signal;
+    this.streamTokens = config.streamTokens ?? false;
   }
 
   /**
@@ -73,7 +75,20 @@ export class Agent {
     while (ctx.iteration < this.maxIterations) {
       ctx.iteration++;
 
-      const { response, usage } = await this.callModel(currentPrompt);
+      let response: AIMessage | string;
+      let usage: TokenUsage | undefined;
+
+      if (this.streamTokens) {
+        // Use streaming mode - iterate over token events
+        const streamResult = await this.callModelStreaming(currentPrompt, true, 'thinking');
+        response = streamResult.response;
+        usage = streamResult.usage;
+      } else {
+        const result = await this.callModel(currentPrompt);
+        response = result.response;
+        usage = result.usage;
+      }
+
       ctx.tokenCounter.add(usage);
       const responseText = typeof response === 'string' ? response : extractTextContent(response);
 
@@ -119,7 +134,7 @@ export class Agent {
 
       // Build iteration prompt with full tool results (Anthropic-style)
       currentPrompt = buildIterationPrompt(
-        query, 
+        query,
         ctx.scratchpad.getToolResults(),
         ctx.scratchpad.formatToolUsageForPrompt()
       );
@@ -144,6 +159,38 @@ export class Agent {
       signal: this.signal,
     });
     return { response: result.response, usage: result.usage };
+  }
+
+  /**
+   * Call the LLM with streaming support, yielding token events.
+   * @param prompt - The prompt to send to the LLM
+   * @param useTools - Whether to bind tools (default: true). When false, returns string directly.
+   * @param mode - The streaming mode (thinking, answer, etc.)
+   */
+  private async *callModelStreaming(
+    prompt: string,
+    useTools: boolean = true,
+    mode: 'thinking' | 'answer' = 'thinking'
+  ): AsyncGenerator<TokenStreamEvent, { response: AIMessage | string; usage?: TokenUsage }> {
+    let accumulatedResponse = '';
+    let usage: TokenUsage | undefined;
+
+    for await (const streamToken of callLlmStream(prompt, {
+      model: this.model,
+      systemPrompt: this.systemPrompt,
+      tools: useTools ? this.tools : undefined,
+      signal: this.signal,
+    })) {
+      // Handle the StreamToken type
+      const token = (streamToken as StreamToken).token;
+      usage = (streamToken as StreamToken).usage;
+
+      // Yield token event
+      accumulatedResponse += token;
+      yield { type: 'token_stream', token, mode, done: (streamToken as StreamToken).done };
+    }
+
+    return { response: accumulatedResponse, usage };
   }
 
   /**
@@ -177,7 +224,21 @@ export class Agent {
     const finalPrompt = buildFinalAnswerPrompt(ctx.query, fullContext);
 
     yield { type: 'answer_start' };
-    const { response, usage } = await this.callModel(finalPrompt, false);
+
+    let response: AIMessage | string;
+    let usage: TokenUsage | undefined;
+
+    if (this.streamTokens) {
+      // Use streaming mode for final answer
+      const streamResult = await this.callModelStreaming(finalPrompt, false, 'answer');
+      response = streamResult.response;
+      usage = streamResult.usage;
+    } else {
+      const result = await this.callModel(finalPrompt, false);
+      response = result.response;
+      usage = result.usage;
+    }
+
     ctx.tokenCounter.add(usage);
     const answer = typeof response === 'string'
       ? response
