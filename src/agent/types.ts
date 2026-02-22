@@ -22,6 +22,10 @@ export interface AgentConfig {
   requestToolApproval?: (request: { tool: string; args: Record<string, unknown> }) => Promise<ApprovalDecision>;
   /** Shared set of tool names that have been session-approved (persists across queries) */
   sessionApprovedTools?: Set<string>;
+  /** Enable streaming token-by-token response to terminal */
+  streamResponse?: boolean;
+  /** Callback for streaming tokens (required if streamResponse is true) */
+  onTokenStream?: (token: string, stream: 'thinking' | 'answer', done: boolean) => void;
 }
 
 /**
@@ -167,7 +171,21 @@ export type AgentEvent =
   | ToolLimitEvent
   | ContextClearedEvent
   | AnswerStartEvent
-  | DoneEvent;
+  | DoneEvent
+  | TokenStreamEvent;
+
+/**
+ * Streaming token event for real-time token-by-token output
+ */
+export interface TokenStreamEvent {
+  type: 'token';
+  /** The token content (can be a word, subword, or character) */
+  content: string;
+  /** The stream this token belongs to: 'thinking' or 'answer' */
+  stream: 'thinking' | 'answer';
+  /** Whether this is the final token in the stream */
+  done: boolean;
+}
 
 /**
  * Aggregated event used by the CLI history renderer.

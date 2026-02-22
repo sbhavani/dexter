@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "workflow_type": "simple",
+  "phase": "DEV_IMPLEMENT",
+  "feature": {
+    "feature": "Implement streaming response mode: stream agent thinking and",
+    "description": "Implement streaming response mode: stream agent thinking and tool results token-by-token to the terminal using ANSI escape codes.",
+    "rationale": "Manually specified via --feature flag",
+    "priority": "P1"
+  },
+  "pm_session": null,
+  "dev_session": null,
+  "pr_url": null,
+  "branch_name": null,
+  "worker_handoff": false,
+  "original_path": "/Users/sb/code/dexter",
+  "worktree_path": "/var/folders/yl/x7v44_357r1ck73mr69d_lzc0000gn/T/agent-team-dexter-20260221-230154-e35ec0",
+  "thread_root_id": null,
+  "started_at": "2026-02-22T05:13:54.548952+00:00",
+  "updated_at": "2026-02-22T05:13:54.548952+00:00"
+}

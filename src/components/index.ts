@@ -11,6 +11,8 @@ export {
   createModelSelector,
   createProviderSelector,
 } from './select-list.js';
+export { StreamResponse, createStreamResponse } from './stream-response.js';
+export type { StreamConfig } from './stream-response.js';
 export { ToolEventComponent } from './tool-event.js';
 export { UserQueryComponent } from './user-query.js';
 export { WorkingIndicatorComponent } from './working-indicator.js';
