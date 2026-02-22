@@ -406,3 +406,109 @@ export async function runCli() {
   workingIndicator.dispose();
   debugPanel.dispose();
 }
+
+export interface JsonOutput {
+  query: string;
+  answer: string;
+  status: 'success' | 'error' | 'interrupted';
+  error?: string;
+  duration?: number;
+  tokenUsage?: {
+    input: number;
+    output: number;
+    total: number;
+  };
+  tokensPerSecond?: number;
+  toolsUsed?: Array<{
+    name: string;
+    args: Record<string, unknown>;
+    result?: string;
+    error?: string;
+  }>;
+}
+
+function getModelSelection() {
+  const onError = (_message: string) => {};
+  const modelSelection = new ModelSelectionController(onError, () => {});
+  return modelSelection;
+}
+
+export async function runJson(query?: string) {
+  if (!query) {
+    const errorOutput: JsonOutput = {
+      query: '',
+      answer: '',
+      status: 'error',
+      error: 'No query provided. Usage: dexter-ts --json "your query here"',
+    };
+    console.log(JSON.stringify(errorOutput, null, 2));
+    process.exit(1);
+  }
+
+  let modelSelection;
+  try {
+    modelSelection = getModelSelection();
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorOutput: JsonOutput = {
+      query,
+      answer: '',
+      status: 'error',
+      error: `Failed to initialize model: ${errorMessage}`,
+    };
+    console.log(JSON.stringify(errorOutput, null, 2));
+    process.exit(1);
+  }
+
+  const inMemoryChatHistory = modelSelection.inMemoryChatHistory;
+  const agentRunner = new AgentRunnerController(
+    { model: modelSelection.model, modelProvider: modelSelection.provider, maxIterations: 10 },
+    inMemoryChatHistory,
+  );
+
+  const startTime = Date.now();
+  const toolsUsed: JsonOutput['toolsUsed'] = [];
+
+  // We need to patch the agent runner to capture tool events
+  const originalRunQuery = agentRunner.runQuery.bind(agentRunner);
+
+  try {
+    const result = await originalRunQuery(query);
+
+    const history = agentRunner.history;
+    const lastItem = history[history.length - 1];
+
+    const output: JsonOutput = {
+      query,
+      answer: result?.answer ?? '',
+      status: lastItem?.status === 'complete' ? 'success' : lastItem?.status === 'interrupted' ? 'interrupted' : 'error',
+      duration: lastItem?.duration,
+      tokenUsage: lastItem?.tokenUsage
+        ? {
+            input: lastItem.tokenUsage.inputTokens,
+            output: lastItem.tokenUsage.outputTokens,
+            total: lastItem.tokenUsage.totalTokens,
+          }
+        : undefined,
+      tokensPerSecond: lastItem?.tokensPerSecond,
+      toolsUsed,
+    };
+
+    if (lastItem?.status === 'error') {
+      output.error = agentRunner.error ?? 'Unknown error';
+    }
+
+    console.log(JSON.stringify(output, null, 2));
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorOutput: JsonOutput = {
+      query,
+      answer: '',
+      status: 'error',
+      error: errorMessage,
+      duration: Date.now() - startTime,
+    };
+    console.log(JSON.stringify(errorOutput, null, 2));
+    process.exit(1);
+  }
+}
