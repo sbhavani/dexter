@@ -29,6 +29,13 @@ import {
   createProviderSelector,
 } from './components/index.js';
 import { editorTheme, theme } from './theme.js';
+import {
+  createSession,
+  loadSession,
+  saveSession,
+  generateSessionId,
+  sessionExists,
+} from './utils/session-storage.js';
 
 function truncateAtWord(str: string, maxLength: number): string {
   if (str.length <= maxLength) {
@@ -163,7 +170,28 @@ function renderHistory(chatLog: ChatLogComponent, history: AgentRunnerController
   }
 }
 
-export async function runCli() {
+export async function runCli(sessionIdToResume: string | null = null) {
+  // Handle session - either resume existing or create new
+  let currentSessionId: string | null = null;
+  let loadedSessionMessages: { messages: ReturnType<typeof import('./utils/in-memory-chat-history.js').InMemoryChatHistory.prototype.getMessagesForSave>; model: string } | null = null;
+
+  if (sessionIdToResume) {
+    if (!sessionExists(sessionIdToResume)) {
+      console.error(`Session "${sessionIdToResume}" does not exist.`);
+      console.error('Use --list-sessions to see available sessions.');
+      process.exit(1);
+    }
+    const sessionData = loadSession(sessionIdToResume);
+    if (sessionData) {
+      currentSessionId = sessionIdToResume;
+      loadedSessionMessages = {
+        messages: sessionData.messages,
+        model: sessionData.model,
+      };
+      console.log(`Resuming session: ${sessionIdToResume}`);
+    }
+  }
+
   const tui = new TUI(new ProcessTerminal());
   const root = new Container();
   const chatLog = new ChatLogComponent(tui);
@@ -181,6 +209,30 @@ export async function runCli() {
     renderSelectionOverlay();
     tui.requestRender();
   });
+
+  // Handle session loading or creation
+  if (loadedSessionMessages) {
+    // Resume existing session - load messages into chat history
+    modelSelection.inMemoryChatHistory.loadFromSession(
+      loadedSessionMessages.messages,
+      loadedSessionMessages.model,
+    );
+  } else {
+    // Create a new session
+    currentSessionId = generateSessionId();
+    createSession(currentSessionId, modelSelection.model, modelSelection.provider);
+  }
+
+  // Save session on exit
+  const saveSessionOnExit = () => {
+    if (currentSessionId) {
+      saveSession(currentSessionId, {
+        messages: modelSelection.inMemoryChatHistory.getMessagesForSave(),
+        model: modelSelection.model,
+        provider: modelSelection.provider,
+      });
+    }
+  };
 
   const agentRunner = new AgentRunnerController(
     { model: modelSelection.model, modelProvider: modelSelection.provider, maxIterations: 10 },
@@ -208,6 +260,7 @@ export async function runCli() {
 
   const handleSubmit = async (query: string) => {
     if (query.toLowerCase() === 'exit' || query.toLowerCase() === 'quit') {
+      saveSessionOnExit();
       tui.stop();
       process.exit(0);
       return;
@@ -260,6 +313,7 @@ export async function runCli() {
       agentRunner.cancelExecution();
       return;
     }
+    saveSessionOnExit();
     tui.stop();
     process.exit(0);
   };
@@ -397,7 +451,10 @@ export async function runCli() {
 
   tui.start();
   await new Promise<void>((resolve) => {
-    const finish = () => resolve();
+    const finish = () => {
+      saveSessionOnExit();
+      resolve();
+    };
     process.once('exit', finish);
     process.once('SIGINT', finish);
     process.once('SIGTERM', finish);

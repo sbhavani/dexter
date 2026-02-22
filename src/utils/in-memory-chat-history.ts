@@ -13,6 +13,14 @@ export interface Message {
 }
 
 /**
+ * Loads messages from a session (for session persistence)
+ */
+export interface LoadedSessionMessages {
+  messages: Message[];
+  model: string;
+}
+
+/**
  * Schema for LLM to select relevant messages
  */
 export const SelectedMessagesSchema = z.object({
@@ -220,5 +228,22 @@ Select which previous messages are relevant to understanding or answering the cu
   clear(): void {
     this.messages = [];
     this.relevantMessagesByQuery.clear();
+  }
+
+  /**
+   * Loads messages from a session (for session persistence)
+   * Sets the model and populates the messages array
+   */
+  loadFromSession(sessionMessages: Message[], model: string): void {
+    this.model = model;
+    this.messages = sessionMessages;
+    this.relevantMessagesByQuery.clear();
+  }
+
+  /**
+   * Returns messages for saving to disk (excludes internal cache)
+   */
+  getMessagesForSave(): Message[] {
+    return [...this.messages];
   }
 }
