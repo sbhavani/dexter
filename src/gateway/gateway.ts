@@ -1,11 +1,13 @@
 import { createChannelManager } from './channels/manager.js';
 import { createWhatsAppPlugin } from './channels/whatsapp/plugin.js';
+import { createTelegramPlugin } from './channels/telegram/plugin.js';
 import {
   assertOutboundAllowed,
   sendComposing,
   sendMessageWhatsApp,
   type WhatsAppInboundMessage,
 } from './channels/whatsapp/index.js';
+import type { TelegramInboundMessage } from './channels/telegram/types.js';
 import { resolveRoute } from './routing/resolve-route.js';
 import { resolveSessionStorePath, upsertSessionMeta } from './sessions/store.js';
 import { loadGatewayConfig, type GatewayConfig } from './config.js';
@@ -40,6 +42,27 @@ function cleanMarkdownForWhatsApp(text: string): string {
   result = result.replace(/\*\*([^*]+)\*\*/g, '*$1*');
   // Merge adjacent bold sections: `*foo* *bar*` -> `*foo bar*`
   result = result.replace(/\*([^*]+)\*\s+\*([^*]+)\*/g, '*$1 $2*');
+  return result;
+}
+
+/**
+ * Clean up markdown for Telegram compatibility.
+ * - Converts `**text**` (markdown bold) to `*text*` (Telegram bold)
+ * - Converts `*text*` (markdown italic) to `_text_` (Telegram italic)
+ * - Converts `__text__` to `__text__` (Telegram underline)
+ * - Converts `~~text~~` to `~text~` (Telegram strikethrough)
+ * - Converts ```code``` to ```code``` (Telegram code block)
+ */
+function cleanMarkdownForTelegram(text: string): string {
+  let result = text;
+  // Convert markdown bold (**text**) to Telegram bold (*text*)
+  result = result.replace(/\*\*([^*]+)\*\*/g, '*$1*');
+  // Convert markdown italic (*text*) to Telegram italic (_text_)
+  result = result.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '_$1_');
+  // Convert markdown underline (__text__) to Telegram underline (__text__)
+  result = result.replace(/__([^_]+)__/g, '__$1__');
+  // Convert markdown strikethrough (~~text~~) to Telegram strikethrough (~text~)
+  result = result.replace(/~~([^~]+)~~/g, '~$1~');
   return result;
 }
 
@@ -133,26 +156,128 @@ async function handleInbound(cfg: GatewayConfig, inbound: WhatsAppInboundMessage
   }
 }
 
+async function handleTelegramInbound(cfg: GatewayConfig, inbound: TelegramInboundMessage): Promise<void> {
+  const bodyPreview = elide(inbound.body.replace(/\n/g, ' '), 50);
+  const senderId = String(inbound.from);
+  console.log(`Telegram inbound from ${senderId} (${inbound.chatType}, ${inbound.body.length} chars): "${bodyPreview}"`);
+  debugLog(`[gateway] handleTelegramInbound from=${senderId} body="${inbound.body.slice(0, 30)}..."`);
+
+  const route = resolveRoute({
+    cfg,
+    channel: 'telegram',
+    accountId: inbound.accountId,
+    peer: { kind: inbound.chatType === 'direct' ? 'direct' : 'group', id: senderId },
+  });
+
+  const storePath = resolveSessionStorePath(route.agentId);
+  upsertSessionMeta({
+    storePath,
+    sessionKey: route.sessionKey,
+    channel: 'telegram',
+    to: senderId,
+    accountId: route.accountId,
+    agentId: route.agentId,
+  });
+
+  // Start typing indicator
+  const TYPING_INTERVAL_MS = 5000;
+  let typingTimer: ReturnType<typeof setInterval> | undefined;
+
+  const startTypingLoop = async () => {
+    await inbound.sendChatAction('typing');
+    typingTimer = setInterval(async () => {
+      await inbound.sendChatAction('typing');
+    }, TYPING_INTERVAL_MS);
+  };
+
+  const stopTypingLoop = () => {
+    if (typingTimer) {
+      clearInterval(typingTimer);
+      typingTimer = undefined;
+    }
+  };
+
+  try {
+    await startTypingLoop();
+    console.log(`Processing message with agent...`);
+    debugLog(`[gateway] running agent for session=${route.sessionKey}`);
+    const startedAt = Date.now();
+    const answer = await runAgentForMessage({
+      sessionKey: route.sessionKey,
+      query: inbound.body,
+      model: 'gpt-5.2',
+      modelProvider: 'openai',
+    });
+    const durationMs = Date.now() - startedAt;
+    debugLog(`[gateway] agent answer length=${answer.length}`);
+
+    stopTypingLoop();
+
+    if (answer.trim()) {
+      // Clean up markdown for Telegram and reply
+      const cleanedAnswer = cleanMarkdownForTelegram(answer);
+      debugLog(`[gateway] sending reply to chat ${inbound.chatId}`);
+      await inbound.reply(cleanedAnswer, 'Markdown');
+      console.log(`Sent reply (${answer.length} chars, ${durationMs}ms)`);
+      debugLog(`[gateway] reply sent`);
+    } else {
+      console.log(`Agent returned empty response (${durationMs}ms)`);
+      debugLog(`[gateway] empty answer, not sending`);
+    }
+  } catch (err) {
+    stopTypingLoop();
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`Error: ${msg}`);
+    debugLog(`[gateway] ERROR: ${msg}`);
+  }
+}
+
 export async function startGateway(params: { configPath?: string } = {}): Promise<GatewayService> {
   const cfg = loadGatewayConfig(params.configPath);
-  const plugin = createWhatsAppPlugin({
+
+  // Create WhatsApp plugin
+  const whatsappPlugin = createWhatsAppPlugin({
     loadConfig: () => loadGatewayConfig(params.configPath),
     onMessage: async (inbound) => {
       const current = loadGatewayConfig(params.configPath);
       await handleInbound(current, inbound);
     },
   });
-  const manager = createChannelManager({
-    plugin,
+
+  // Create Telegram plugin
+  const telegramPlugin = createTelegramPlugin({
+    loadConfig: () => loadGatewayConfig(params.configPath),
+    onMessage: async (inbound) => {
+      const current = loadGatewayConfig(params.configPath);
+      await handleTelegramInbound(current, inbound);
+    },
+  });
+
+  // Create channel managers for both plugins
+  const whatsappManager = createChannelManager({
+    plugin: whatsappPlugin,
     loadConfig: () => loadGatewayConfig(params.configPath),
   });
-  await manager.startAll();
+
+  const telegramManager = createChannelManager({
+    plugin: telegramPlugin,
+    loadConfig: () => loadGatewayConfig(params.configPath),
+  });
+
+  // Start all accounts for both channels
+  await whatsappManager.startAll();
+  await telegramManager.startAll();
 
   return {
     stop: async () => {
-      await manager.stopAll();
+      await whatsappManager.stopAll();
+      await telegramManager.stopAll();
     },
-    snapshot: () => manager.getSnapshot(),
+    snapshot: () => {
+      const wa = whatsappManager.getSnapshot();
+      const tg = telegramManager.getSnapshot();
+      return { ...wa, ...tg };
+    },
   };
 }
 
