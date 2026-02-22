@@ -26,6 +26,8 @@ export class Agent {
   private readonly toolExecutor: AgentToolExecutor;
   private readonly systemPrompt: string;
   private readonly signal?: AbortSignal;
+  private readonly streamResponse?: boolean;
+  private readonly onTokenStream?: (token: string, stream: 'thinking' | 'answer', done: boolean) => void;
 
   private constructor(
     config: AgentConfig,
@@ -39,6 +41,8 @@ export class Agent {
     this.toolExecutor = new AgentToolExecutor(this.toolMap, config.signal, config.requestToolApproval, config.sessionApprovedTools);
     this.systemPrompt = systemPrompt;
     this.signal = config.signal;
+    this.streamResponse = config.streamResponse;
+    this.onTokenStream = config.onTokenStream;
   }
 
   /**
@@ -73,7 +77,7 @@ export class Agent {
     while (ctx.iteration < this.maxIterations) {
       ctx.iteration++;
 
-      const { response, usage } = await this.callModel(currentPrompt);
+      const { response, usage } = await this.callModel(currentPrompt, true, 'thinking');
       ctx.tokenCounter.add(usage);
       const responseText = typeof response === 'string' ? response : extractTextContent(response);
 
@@ -135,14 +139,30 @@ export class Agent {
    * Call the LLM with the current prompt.
    * @param prompt - The prompt to send to the LLM
    * @param useTools - Whether to bind tools (default: true). When false, returns string directly.
+   * @param streamType - When provided, enables streaming for 'thinking' or 'answer' responses
    */
-  private async callModel(prompt: string, useTools: boolean = true): Promise<{ response: AIMessage | string; usage?: TokenUsage }> {
+  private async callModel(
+    prompt: string,
+    useTools: boolean = true,
+    streamType?: 'thinking' | 'answer'
+  ): Promise<{ response: AIMessage | string; usage?: TokenUsage }> {
+    const onToken = this.streamResponse && streamType && this.onTokenStream
+      ? (token: string) => { if (this.onTokenStream) this.onTokenStream(token, streamType, false); }
+      : undefined;
+
     const result = await callLlm(prompt, {
       model: this.model,
       systemPrompt: this.systemPrompt,
       tools: useTools ? this.tools : undefined,
       signal: this.signal,
+      onToken,
     });
+
+    // Signal completion of streaming
+    if (onToken && streamType && this.onTokenStream) {
+      this.onTokenStream('', streamType, true);
+    }
+
     return { response: result.response, usage: result.usage };
   }
 
@@ -177,7 +197,7 @@ export class Agent {
     const finalPrompt = buildFinalAnswerPrompt(ctx.query, fullContext);
 
     yield { type: 'answer_start' };
-    const { response, usage } = await this.callModel(finalPrompt, false);
+    const { response, usage } = await this.callModel(finalPrompt, false, 'answer');
     ctx.tokenCounter.add(usage);
     const answer = typeof response === 'string'
       ? response

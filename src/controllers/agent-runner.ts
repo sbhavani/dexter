@@ -8,11 +8,19 @@ import type {
 } from '../agent/index.js';
 import type { DisplayEvent } from '../agent/types.js';
 import type { HistoryItem, HistoryItemStatus, WorkingState } from '../types.js';
+import { StreamResponse, type StreamConfig } from '../components/stream-response.js';
 
 type ChangeListener = () => void;
 
 export interface RunQueryResult {
   answer: string;
+}
+
+export interface AgentRunnerOptions {
+  /** Enable streaming response mode */
+  streamResponse?: boolean;
+  /** Configuration for streaming output */
+  streamConfig?: StreamConfig;
 }
 
 export class AgentRunnerController {
@@ -26,15 +34,31 @@ export class AgentRunnerController {
   private abortController: AbortController | null = null;
   private approvalResolve: ((decision: ApprovalDecision) => void) | null = null;
   private sessionApprovedTools = new Set<string>();
+  private streamResponse: StreamResponse | null = null;
+  private readonly streamEnabled: boolean;
 
   constructor(
     agentConfig: AgentConfig,
     inMemoryChatHistory: InMemoryChatHistory,
     onChange?: ChangeListener,
+    options?: AgentRunnerOptions,
   ) {
     this.agentConfig = agentConfig;
     this.inMemoryChatHistory = inMemoryChatHistory;
     this.onChange = onChange;
+    this.streamEnabled = options?.streamResponse ?? false;
+
+    // Initialize streaming if enabled
+    if (this.streamEnabled && options?.streamConfig) {
+      this.streamResponse = new StreamResponse(options.streamConfig);
+    }
+  }
+
+  /**
+   * Get the stream response handler
+   */
+  get stream(): StreamResponse | null {
+    return this.streamResponse;
   }
 
   get history(): HistoryItem[] {
@@ -111,12 +135,19 @@ export class AgentRunnerController {
     this.workingStateValue = { status: 'thinking' };
     this.emitChange();
 
+    // Reset stream for new query
+    if (this.streamResponse) {
+      this.streamResponse.reset();
+    }
+
     try {
       const agent = await Agent.create({
         ...this.agentConfig,
         signal: this.abortController.signal,
         requestToolApproval: this.requestToolApproval,
         sessionApprovedTools: this.sessionApprovedTools,
+        streamResponse: this.streamEnabled,
+        onTokenStream: this.streamEnabled ? this.handleTokenStream.bind(this) : undefined,
       });
       const stream = agent.run(query, this.inMemoryChatHistory);
       for await (const event of stream) {
@@ -144,6 +175,15 @@ export class AgentRunnerController {
       return undefined;
     } finally {
       this.abortController = null;
+    }
+  }
+
+  /**
+   * Handle streaming token from agent
+   */
+  private handleTokenStream(token: string, stream: 'thinking' | 'answer', done: boolean) {
+    if (this.streamResponse) {
+      this.streamResponse.onToken(token, stream, done);
     }
   }
 

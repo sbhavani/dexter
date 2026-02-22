@@ -139,6 +139,8 @@ interface CallLlmOptions {
   outputSchema?: z.ZodType<unknown>;
   tools?: StructuredToolInterface[];
   signal?: AbortSignal;
+  /** Callback for streaming token-by-token response */
+  onToken?: (token: string) => void;
 }
 
 export interface LlmResult {
@@ -195,10 +197,12 @@ function buildAnthropicMessages(systemPrompt: string, userPrompt: string) {
 }
 
 export async function callLlm(prompt: string, options: CallLlmOptions = {}): Promise<LlmResult> {
-  const { model = DEFAULT_MODEL, systemPrompt, outputSchema, tools, signal } = options;
+  const { model = DEFAULT_MODEL, systemPrompt, outputSchema, tools, signal, onToken } = options;
   const finalSystemPrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
 
-  const llm = getChatModel(model, false);
+  // Enable streaming if onToken callback is provided
+  const streaming = !!onToken;
+  const llm = getChatModel(model, streaming);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let runnable: Runnable<any, any> = llm;
@@ -213,8 +217,11 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
   const provider = resolveProvider(model);
   let result;
 
-  if (provider.id === 'anthropic') {
-    // Anthropic: use explicit messages with cache_control for prompt caching (~90% savings)
+  if (streaming && onToken) {
+    // Streaming mode: stream tokens via callback
+    result = await streamLlm(runnable, provider.id, finalSystemPrompt, prompt, tools, onToken, invokeOpts);
+  } else if (provider.id === 'anthropic') {
+    // Non-streaming Anthropic: use explicit messages with cache_control for prompt caching (~90% savings)
     const messages = buildAnthropicMessages(finalSystemPrompt, prompt);
     result = await withRetry(() => runnable.invoke(messages, invokeOpts), provider.displayName);
   } else {
@@ -234,4 +241,65 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
     return { response: (result as { content: string }).content, usage };
   }
   return { response: result as AIMessage, usage };
+}
+
+/**
+ * Stream LLM response token-by-token using the streaming API
+ */
+async function streamLlm(
+  runnable: Runnable,
+  providerId: string,
+  systemPrompt: string,
+  prompt: string,
+  tools: StructuredToolInterface[] | undefined,
+  onToken: (token: string) => void,
+  invokeOpts?: { signal?: AbortSignal }
+): Promise<AIMessage> {
+  // Build messages
+  let messages;
+  if (providerId === 'anthropic') {
+    messages = buildAnthropicMessages(systemPrompt, prompt);
+  } else {
+    const promptTemplate = ChatPromptTemplate.fromMessages([
+      ['system', systemPrompt],
+      ['user', '{prompt}'],
+    ]);
+    runnable = promptTemplate.pipe(runnable);
+    messages = { prompt };
+  }
+
+  // Collect streamed content
+  let fullContent = '';
+
+  // Use stream method for token-by-token streaming
+  const stream = runnable.stream(messages, invokeOpts);
+
+  for await (const chunk of stream) {
+    // Handle different response formats
+    if (typeof chunk === 'string') {
+      onToken(chunk);
+      fullContent += chunk;
+    } else if (chunk && typeof chunk === 'object') {
+      // AIMessage chunks have content property
+      const content = (chunk as AIMessage).content;
+      if (typeof content === 'string') {
+        onToken(content);
+        fullContent += content;
+      } else if (Array.isArray(content)) {
+        // Handle content arrays (e.g., tool calls)
+        for (const item of content) {
+          if (typeof item === 'string') {
+            onToken(item);
+            fullContent += item;
+          } else if (item && typeof item === 'object' && 'text' in item) {
+            const text = (item as { text: string }).text;
+            onToken(text);
+            fullContent += text;
+          }
+        }
+      }
+    }
+  }
+
+  return new AIMessage(fullContent);
 }
