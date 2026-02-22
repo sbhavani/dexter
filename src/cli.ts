@@ -29,6 +29,10 @@ import {
   createProviderSelector,
 } from './components/index.js';
 import { editorTheme, theme } from './theme.js';
+import { InMemoryChatHistory } from './utils/in-memory-chat-history.js';
+import { getSetting } from './utils/config.js';
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from './model/llm.js';
+import { getDefaultModelForProvider } from './utils/model.js';
 
 function truncateAtWord(str: string, maxLength: number): string {
   if (str.length <= maxLength) {
@@ -405,4 +409,96 @@ export async function runCli() {
 
   workingIndicator.dispose();
   debugPanel.dispose();
+}
+
+export interface JsonOutput {
+  success: boolean;
+  answer?: string;
+  error?: string;
+  metadata?: {
+    model: string;
+    provider: string;
+    durationMs?: number;
+    tokenUsage?: {
+      input: number;
+      output: number;
+      total: number;
+    };
+    tokensPerSecond?: number;
+  };
+}
+
+export async function runJsonMode(prompt: string): Promise<void> {
+  // Set up model selection (non-interactive)
+  const onError = (message: string) => {
+    logger.error(message);
+  };
+
+  const provider = getSetting('provider', DEFAULT_PROVIDER);
+  const savedModel = getSetting('modelId', null) as string | null;
+  const model = savedModel ?? getDefaultModelForProvider(provider) ?? DEFAULT_MODEL;
+
+  const chatHistory = new InMemoryChatHistory(model);
+
+  const agentRunner = new AgentRunnerController(
+    { model, modelProvider: provider, maxIterations: 10 },
+    chatHistory,
+    () => {},
+  );
+
+  try {
+    // Run the query
+    const startTime = Date.now();
+    const result = await agentRunner.runQuery(prompt);
+    const durationMs = Date.now() - startTime;
+
+    // Build the JSON output
+    const output: JsonOutput = {
+      success: !!result?.answer,
+    };
+
+    if (result?.answer) {
+      output.answer = result.answer;
+    }
+
+    if (agentRunner.error) {
+      output.error = agentRunner.error;
+    }
+
+    // Get metadata from the history
+    const historyItem = agentRunner.history[agentRunner.history.length - 1];
+    if (historyItem) {
+      output.metadata = {
+        model,
+        provider,
+        durationMs,
+      };
+
+      if (historyItem.tokenUsage) {
+        output.metadata.tokenUsage = {
+          input: historyItem.tokenUsage.inputTokens ?? 0,
+          output: historyItem.tokenUsage.outputTokens ?? 0,
+          total: (historyItem.tokenUsage.inputTokens ?? 0) + (historyItem.tokenUsage.outputTokens ?? 0),
+        };
+      }
+
+      if (historyItem.tokensPerSecond) {
+        output.metadata.tokensPerSecond = historyItem.tokensPerSecond;
+      }
+    }
+
+    console.log(JSON.stringify(output, null, 2));
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const output: JsonOutput = {
+      success: false,
+      error: errorMessage,
+      metadata: {
+        model,
+        provider,
+      },
+    };
+    console.log(JSON.stringify(output, null, 2));
+    process.exit(1);
+  }
 }
