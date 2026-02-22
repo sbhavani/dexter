@@ -29,6 +29,9 @@ import {
   createProviderSelector,
 } from './components/index.js';
 import { editorTheme, theme } from './theme.js';
+import { SessionManager } from './sessions/index.js';
+import type { SessionOptions } from './sessions/index.js';
+import type { HistoryItem } from './types.js';
 
 function truncateAtWord(str: string, maxLength: number): string {
   if (str.length <= maxLength) {
@@ -163,7 +166,7 @@ function renderHistory(chatLog: ChatLogComponent, history: AgentRunnerController
   }
 }
 
-export async function runCli() {
+export async function runCli(sessionOptions: SessionOptions = {}) {
   const tui = new TUI(new ProcessTerminal());
   const root = new Container();
   const chatLog = new ChatLogComponent(tui);
@@ -193,7 +196,53 @@ export async function runCli() {
     },
   );
 
-  const intro = new IntroComponent(modelSelection.model);
+  // Initialize session manager
+  const sessionManager = new SessionManager();
+  let sessionLabel = '';
+
+  if (sessionOptions.sessionId) {
+    try {
+      const { metadata, exchanges } = sessionManager.resume(
+        sessionOptions.sessionId,
+        modelSelection.inMemoryChatHistory,
+      );
+      sessionLabel = `Session: ${metadata.id} (resumed, ${metadata.exchangeCount} exchanges)`;
+
+      // Convert persisted exchanges to HistoryItem[] for display
+      const restoredHistory: HistoryItem[] = exchanges
+        .filter((e) => e.status === 'complete')
+        .map((e) => ({
+          id: e.id,
+          query: e.query,
+          events: [],
+          answer: e.answer,
+          status: 'complete' as const,
+          startTime: e.timestamp,
+          duration: e.duration ?? undefined,
+          tokenUsage: e.tokenUsage ?? undefined,
+        }));
+      agentRunner.setHistory(restoredHistory);
+    } catch (err) {
+      // Session not found — show error with available sessions and exit
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Error: ${message}\n\n`);
+      const available = sessionManager.listSessions().slice(0, 5);
+      if (available.length > 0) {
+        process.stderr.write('Available sessions:\n');
+        for (const s of available) {
+          const preview = s.firstQuery || '(no queries)';
+          process.stderr.write(`  ${s.id}  ${new Date(s.updatedAt).toISOString().slice(0, 16).replace('T', ' ')}  "${preview}"\n`);
+        }
+        process.stderr.write('\nUse --list-sessions to see all sessions.\n');
+      }
+      process.exit(1);
+    }
+  } else {
+    const meta = sessionManager.startNew(modelSelection.model, modelSelection.provider);
+    sessionLabel = `Session: ${meta.id}`;
+  }
+
+  const intro = new IntroComponent(modelSelection.model, sessionLabel);
   const errorText = new Text('', 0, 0);
   const workingIndicator = new WorkingIndicatorComponent(tui);
   const editor = new CustomEditor(tui, editorTheme);
@@ -228,6 +277,25 @@ export async function runCli() {
     if (result?.answer) {
       await inputHistory.updateAgentResponse(result.answer);
     }
+
+    // Persist exchange to session
+    const lastItem = agentRunner.history[agentRunner.history.length - 1];
+    if (lastItem) {
+      const chatMessages = modelSelection.inMemoryChatHistory.getMessages();
+      const lastChatMsg = chatMessages[chatMessages.length - 1];
+      sessionManager.saveExchange({
+        query: lastItem.query,
+        answer: lastItem.answer || '',
+        summary: lastChatMsg?.summary ?? null,
+        model: modelSelection.model,
+        status: lastItem.status === 'complete' ? 'complete' : lastItem.status === 'error' ? 'error' : 'interrupted',
+        duration: lastItem.duration ?? null,
+        tokenUsage: lastItem.tokenUsage
+          ? { inputTokens: lastItem.tokenUsage.inputTokens, outputTokens: lastItem.tokenUsage.outputTokens, totalTokens: lastItem.tokenUsage.totalTokens }
+          : null,
+      });
+    }
+
     refreshError();
     tui.requestRender();
   };

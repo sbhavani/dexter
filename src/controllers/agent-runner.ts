@@ -59,6 +59,11 @@ export class AgentRunnerController {
     );
   }
 
+  setHistory(items: HistoryItem[]) {
+    this.historyValue = [...items];
+    this.emitChange();
+  }
+
   setError(error: string | null) {
     this.errorValue = error;
     this.emitChange();

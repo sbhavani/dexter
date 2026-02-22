@@ -8,7 +8,7 @@ const INTRO_WIDTH = 50;
 export class IntroComponent extends Container {
   private readonly modelText: Text;
 
-  constructor(model: string) {
+  constructor(model: string, sessionLabel?: string) {
     super();
 
     const welcomeText = 'Welcome to Dexter';
@@ -38,7 +38,7 @@ export class IntroComponent extends Container {
         theme.bold(
           theme.primary(
             `
-██████╗ ███████╗██╗  ██╗████████╗███████╗██████╗ 
+██████╗ ███████╗██╗  ██╗████████╗███████╗██████╗
 ██╔══██╗██╔════╝╚██╗██╔╝╚══██╔══╝██╔════╝██╔══██╗
 ██║  ██║█████╗   ╚███╔╝    ██║   █████╗  ██████╔╝
 ██║  ██║██╔══╝   ██╔██╗    ██║   ██╔══╝  ██╔══██╗
@@ -53,6 +53,9 @@ export class IntroComponent extends Container {
 
     this.addChild(new Spacer(1));
     this.addChild(new Text('Your AI assistant for deep financial research.', 0, 0));
+    if (sessionLabel) {
+      this.addChild(new Text(theme.muted(sessionLabel), 0, 0));
+    }
     this.modelText = new Text('', 0, 0);
     this.addChild(this.modelText);
     this.setModel(model);
