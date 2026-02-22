@@ -21,6 +21,7 @@ import { getSegmentedRevenues } from './segments.js';
 import { getCryptoPriceSnapshot, getCryptoPrices, getCryptoTickers } from './crypto.js';
 import { getInsiderTrades } from './insider_trades.js';
 import { getCompanyFacts } from './company_facts.js';
+import { portfolioAnalysis } from './portfolio.js';
 
 // All finance tools available for routing
 const FINANCE_TOOLS: StructuredToolInterface[] = [
@@ -30,6 +31,8 @@ const FINANCE_TOOLS: StructuredToolInterface[] = [
   getCryptoPriceSnapshot,
   getCryptoPrices,
   getCryptoTickers,
+  // Portfolio Analysis
+  portfolioAnalysis,
   // Fundamentals
   getIncomeStatements,
   getBalanceSheets,
