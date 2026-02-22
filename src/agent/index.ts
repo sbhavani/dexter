@@ -4,11 +4,12 @@ export { Scratchpad } from './scratchpad.js';
 
 export { getCurrentDate, buildSystemPrompt, buildIterationPrompt, DEFAULT_SYSTEM_PROMPT } from './prompts.js';
 
-export type { 
+export type {
   ApprovalDecision,
-  AgentConfig, 
+  AgentConfig,
   Message,
   AgentEvent,
+  TokenStreamEvent,
   ThinkingEvent,
   ToolStartEvent,
   ToolProgressEvent,
