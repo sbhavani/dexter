@@ -22,6 +22,8 @@ export interface AgentConfig {
   requestToolApproval?: (request: { tool: string; args: Record<string, unknown> }) => Promise<ApprovalDecision>;
   /** Shared set of tool names that have been session-approved (persists across queries) */
   sessionApprovedTools?: Set<string>;
+  /** Enable streaming mode for token-by-token output (default: auto-detect from terminal) */
+  streamingEnabled?: boolean;
 }
 
 /**
@@ -154,19 +156,47 @@ export interface DoneEvent {
 }
 
 /**
+ * Agent is processing/thinking (incremental delta)
+ */
+export interface ThinkingDeltaEvent {
+  type: 'thinking_delta';
+  delta: string;
+}
+
+/**
+ * Tool result (incremental delta)
+ */
+export interface ToolResultDeltaEvent {
+  type: 'tool_result_delta';
+  toolId: string;
+  delta: string;
+}
+
+/**
+ * Final answer (incremental delta)
+ */
+export interface AnswerDeltaEvent {
+  type: 'answer_delta';
+  delta: string;
+}
+
+/**
  * Union type for all agent events
  */
 export type AgentEvent =
   | ThinkingEvent
+  | ThinkingDeltaEvent
   | ToolStartEvent
   | ToolProgressEvent
   | ToolEndEvent
+  | ToolResultDeltaEvent
   | ToolErrorEvent
   | ToolApprovalEvent
   | ToolDeniedEvent
   | ToolLimitEvent
   | ContextClearedEvent
   | AnswerStartEvent
+  | AnswerDeltaEvent
   | DoneEvent;
 
 /**

@@ -9,6 +9,7 @@ import type {
   ToolErrorEvent,
   ToolLimitEvent,
   ToolProgressEvent,
+  ToolResultDeltaEvent,
   ToolStartEvent,
 } from './types.js';
 import type { RunContext } from './run-context.js';
@@ -17,6 +18,7 @@ type ToolExecutionEvent =
   | ToolStartEvent
   | ToolProgressEvent
   | ToolEndEvent
+  | ToolResultDeltaEvent
   | ToolErrorEvent
   | ToolApprovalEvent
   | ToolDeniedEvent
@@ -131,6 +133,9 @@ export class AgentToolExecutor {
       const result = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult);
       const duration = Date.now() - toolStartTime;
 
+      // Emit tool result as delta events for progressive display
+      yield* this.emitResultDeltas(toolName, result);
+
       yield { type: 'tool_end', tool: toolName, args: toolArgs, result, duration };
 
       // Record the tool call for limit tracking
@@ -164,5 +169,32 @@ export class AgentToolExecutor {
 
   private requiresApproval(toolName: string): boolean {
     return (TOOLS_REQUIRING_APPROVAL as readonly string[]).includes(toolName);
+  }
+
+  /**
+   * Emits tool result as incremental delta events for progressive display.
+   * Chunks the result string and yields delta events for each chunk.
+   */
+  private async *emitResultDeltas(
+    toolName: string,
+    result: string
+  ): AsyncGenerator<ToolResultDeltaEvent, void> {
+    const chunkSize = 20; // Characters per delta chunk
+    const toolId = `tool_${toolName}`;
+
+    // For short results, emit as single delta
+    if (result.length <= chunkSize) {
+      yield { type: 'tool_result_delta', toolId, delta: result };
+      return;
+    }
+
+    // For longer results, chunk and emit progressively
+    for (let i = 0; i < result.length; i += chunkSize) {
+      const chunk = result.slice(i, i + chunkSize);
+      yield { type: 'tool_result_delta', toolId, delta: chunk };
+
+      // Small delay between chunks to create streaming effect
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
   }
 }
