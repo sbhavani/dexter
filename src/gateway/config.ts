@@ -26,6 +26,14 @@ const WhatsAppAccountSchema = z.object({
   sendReadReceipts: z.boolean().optional().default(true),
 });
 
+const TelegramAccountSchema = z.object({
+  name: z.string().optional(),
+  enabled: z.boolean().optional().default(true),
+  allowFrom: z.array(z.string()).optional().default([]),
+  dmPolicy: DmPolicySchema.optional(),
+  groupPolicy: GroupPolicySchema.optional(),
+});
+
 const GatewayConfigSchema = z.object({
   gateway: z
     .object({
@@ -41,6 +49,16 @@ const GatewayConfigSchema = z.object({
         .object({
           enabled: z.boolean().optional(),
           accounts: z.record(z.string(), WhatsAppAccountSchema).optional(),
+          allowFrom: z.array(z.string()).optional(),
+        })
+        .optional(),
+      telegram: z
+        .object({
+          enabled: z.boolean().optional(),
+          botToken: z.string().optional(),
+          webhookSecret: z.string().optional(),
+          webhookUrl: z.string().optional(),
+          accounts: z.record(z.string(), TelegramAccountSchema).optional(),
           allowFrom: z.array(z.string()).optional(),
         })
         .optional(),
@@ -81,6 +99,14 @@ export type GatewayConfig = {
       accounts: Record<string, z.infer<typeof WhatsAppAccountSchema>>;
       allowFrom: string[];
     };
+    telegram: {
+      enabled: boolean;
+      botToken?: string;
+      webhookSecret?: string;
+      webhookUrl?: string;
+      accounts: Record<string, z.infer<typeof TelegramAccountSchema>>;
+      allowFrom: string[];
+    };
   };
   bindings: Array<{
     agentId: string;
@@ -104,6 +130,15 @@ export type WhatsAppAccountConfig = {
   sendReadReceipts: boolean;
 };
 
+export type TelegramAccountConfig = {
+  accountId: string;
+  name?: string;
+  enabled: boolean;
+  allowFrom: string[];
+  dmPolicy: 'pairing' | 'allowlist' | 'open' | 'disabled';
+  groupPolicy: 'open' | 'allowlist' | 'disabled';
+};
+
 export function getGatewayConfigPath(overridePath?: string): string {
   return overridePath ?? process.env.DEXTER_GATEWAY_CONFIG ?? DEFAULT_GATEWAY_PATH;
 }
@@ -113,7 +148,10 @@ export function loadGatewayConfig(overridePath?: string): GatewayConfig {
   if (!existsSync(path)) {
     return {
       gateway: { accountId: 'default', logLevel: 'info' },
-      channels: { whatsapp: { enabled: true, accounts: {}, allowFrom: [] } },
+      channels: {
+        whatsapp: { enabled: true, accounts: {}, allowFrom: [] },
+        telegram: { enabled: false, accounts: {}, allowFrom: [] },
+      },
       bindings: [],
     };
   }
@@ -132,6 +170,14 @@ export function loadGatewayConfig(overridePath?: string): GatewayConfig {
         enabled: parsed.channels?.whatsapp?.enabled ?? true,
         accounts: parsed.channels?.whatsapp?.accounts ?? {},
         allowFrom: parsed.channels?.whatsapp?.allowFrom ?? [],
+      },
+      telegram: {
+        enabled: parsed.channels?.telegram?.enabled ?? false,
+        botToken: parsed.channels?.telegram?.botToken,
+        webhookSecret: parsed.channels?.telegram?.webhookSecret,
+        webhookUrl: parsed.channels?.telegram?.webhookUrl,
+        accounts: parsed.channels?.telegram?.accounts ?? {},
+        allowFrom: parsed.channels?.telegram?.allowFrom ?? [],
       },
     },
     bindings: parsed.bindings ?? [],
@@ -178,6 +224,35 @@ export function resolveWhatsAppAccount(
     groupPolicy: account.groupPolicy ?? 'disabled',
     groupAllowFrom: account.groupAllowFrom ?? [],
     sendReadReceipts: account.sendReadReceipts ?? true,
+  };
+}
+
+export function listTelegramAccountIds(cfg: GatewayConfig): string[] {
+  const accounts = cfg.channels.telegram.accounts ?? {};
+  const ids = Object.keys(accounts);
+  return ids.length > 0 ? ids : [cfg.gateway.accountId];
+}
+
+export function resolveTelegramAccount(
+  cfg: GatewayConfig,
+  accountId: string,
+): TelegramAccountConfig {
+  const account = cfg.channels.telegram.accounts?.[accountId] ?? {};
+  const rawAllowFrom = account.allowFrom ?? cfg.channels.telegram.allowFrom ?? [];
+  const allowFrom = Array.from(
+    new Set(
+      rawAllowFrom
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
+  );
+  return {
+    accountId,
+    enabled: account.enabled ?? true,
+    name: account.name,
+    allowFrom,
+    dmPolicy: account.dmPolicy ?? 'allowlist',
+    groupPolicy: account.groupPolicy ?? 'allowlist',
   };
 }
 
