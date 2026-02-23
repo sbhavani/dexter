@@ -6,8 +6,9 @@ import type {
   ApprovalDecision,
   DoneEvent,
 } from '../agent/index.js';
-import type { DisplayEvent } from '../agent/types.js';
+import type { DisplayEvent, TokenEvent } from '../agent/types.js';
 import type { HistoryItem, HistoryItemStatus, WorkingState } from '../types.js';
+import { createStreamingRenderer } from '../components/streaming-renderer.js';
 
 type ChangeListener = () => void;
 
@@ -26,6 +27,7 @@ export class AgentRunnerController {
   private abortController: AbortController | null = null;
   private approvalResolve: ((decision: ApprovalDecision) => void) | null = null;
   private sessionApprovedTools = new Set<string>();
+  private readonly streamingRenderer = createStreamingRenderer();
 
   constructor(
     agentConfig: AgentConfig,
@@ -165,6 +167,10 @@ export class AgentRunnerController {
           event,
           completed: true,
         });
+        break;
+      case 'token':
+        // Handle streaming token event - render to terminal
+        this.streamingRenderer.renderToken(event as TokenEvent);
         break;
       case 'tool_start': {
         const toolId = `tool-${event.tool}-${Date.now()}`;

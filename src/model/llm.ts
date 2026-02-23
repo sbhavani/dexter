@@ -139,6 +139,7 @@ interface CallLlmOptions {
   outputSchema?: z.ZodType<unknown>;
   tools?: StructuredToolInterface[];
   signal?: AbortSignal;
+  streaming?: boolean;
 }
 
 export interface LlmResult {
@@ -195,10 +196,10 @@ function buildAnthropicMessages(systemPrompt: string, userPrompt: string) {
 }
 
 export async function callLlm(prompt: string, options: CallLlmOptions = {}): Promise<LlmResult> {
-  const { model = DEFAULT_MODEL, systemPrompt, outputSchema, tools, signal } = options;
+  const { model = DEFAULT_MODEL, systemPrompt, outputSchema, tools, signal, streaming = false } = options;
   const finalSystemPrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
 
-  const llm = getChatModel(model, false);
+  const llm = getChatModel(model, streaming);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let runnable: Runnable<any, any> = llm;
@@ -234,4 +235,70 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
     return { response: (result as { content: string }).content, usage };
   }
   return { response: result as AIMessage, usage };
+}
+
+/**
+ * Check if a provider supports streaming
+ */
+export function providerSupportsStreaming(providerId: string): boolean {
+  // All supported providers support streaming via LangChain
+  const streamingProviders = ['openai', 'anthropic', 'google', 'xai', 'openrouter', 'moonshot', 'deepseek', 'ollama'];
+  return streamingProviders.includes(providerId);
+}
+
+/**
+ * Call LLM with streaming and return an async generator
+ */
+export async function* callLlmStream(
+  prompt: string,
+  options: CallLlmOptions = {}
+): AsyncGenerator<{ content: string; done: boolean }> {
+  const { model = DEFAULT_MODEL, systemPrompt, tools, signal } = options;
+  const finalSystemPrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
+
+  const llm = getChatModel(model, true);
+  const provider = resolveProvider(model);
+
+  if (!providerSupportsStreaming(provider.id)) {
+    // Fallback to non-streaming and yield all at once
+    logger.warn(`[LLM] Provider '${provider.id}' does not support streaming, falling back to batch mode`);
+    const result = await callLlm(prompt, { ...options, streaming: false });
+    yield { content: typeof result.response === 'string' ? result.response : '', done: true };
+    return;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let runnable: Runnable<any, any> = llm;
+
+  if (tools && tools.length > 0 && llm.bindTools) {
+    runnable = llm.bindTools(tools);
+  }
+
+  const invokeOpts = signal ? { signal } : undefined;
+
+  try {
+    if (provider.id === 'anthropic') {
+      const messages = buildAnthropicMessages(finalSystemPrompt, prompt);
+      for await (const chunk of runnable.stream(messages, invokeOpts)) {
+        const content = typeof chunk === 'string' ? chunk : chunk?.content || '';
+        if (content) {
+          yield { content, done: false };
+        }
+      }
+    } else {
+      const promptTemplate = ChatPromptTemplate.fromMessages([
+        ['system', finalSystemPrompt],
+        ['user', '{prompt}'],
+      ]);
+      const chain = promptTemplate.pipe(runnable);
+      for await (const chunk of chain.stream({ prompt }, invokeOpts)) {
+        const content = typeof chunk === 'string' ? chunk : chunk?.content || '';
+        if (content) {
+          yield { content, done: false };
+        }
+      }
+    }
+  } finally {
+    yield { content: '', done: true };
+  }
 }

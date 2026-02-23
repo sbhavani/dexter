@@ -99,3 +99,17 @@ export function saveApiKeyForProvider(providerId: string, apiKey: string): boole
   if (!apiKeyName) return false;
   return saveApiKeyToEnv(apiKeyName, apiKey);
 }
+
+/**
+ * Check if streaming mode is enabled via environment variable
+ * Default: true (streaming enabled)
+ */
+export function isStreamingEnabled(): boolean {
+  const envValue = process.env.STREAMING_ENABLED;
+  // Default to true if not set
+  if (envValue === undefined || envValue === '') {
+    return true;
+  }
+  // Parse boolean string
+  return envValue.toLowerCase() === 'true' || envValue === '1';
+}

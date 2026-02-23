@@ -22,6 +22,8 @@ export interface AgentConfig {
   requestToolApproval?: (request: { tool: string; args: Record<string, unknown> }) => Promise<ApprovalDecision>;
   /** Shared set of tool names that have been session-approved (persists across queries) */
   sessionApprovedTools?: Set<string>;
+  /** Streaming configuration */
+  streaming?: StreamingConfig;
 }
 
 /**
@@ -141,6 +143,22 @@ export interface TokenUsage {
 }
 
 /**
+ * Token types for streaming content
+ */
+export type StreamingTokenType = 'thinking' | 'tool' | 'answer';
+
+/**
+ * Token event emitted for each token or chunk of streaming content
+ */
+export interface TokenEvent {
+  type: 'token';
+  tokenType: StreamingTokenType;
+  content: string;
+  isComplete: boolean;
+  timestamp: number;
+}
+
+/**
  * Agent completed with final result
  */
 export interface DoneEvent {
@@ -152,6 +170,30 @@ export interface DoneEvent {
   tokenUsage?: TokenUsage;
   tokensPerSecond?: number;
 }
+
+/**
+ * Configuration for streaming behavior
+ */
+export interface StreamingConfig {
+  /** Whether streaming is enabled */
+  enabled: boolean;
+  /** Buffer duration in milliseconds before flushing to terminal */
+  bufferMs?: number;
+  /** Whether to stream thinking content */
+  showThinking?: boolean;
+  /** Whether to stream tool progress */
+  showToolProgress?: boolean;
+}
+
+/**
+ * Default streaming configuration
+ */
+export const DEFAULT_STREAMING_CONFIG: StreamingConfig = {
+  enabled: true,
+  bufferMs: 10,
+  showThinking: true,
+  showToolProgress: true,
+};
 
 /**
  * Union type for all agent events
@@ -167,6 +209,7 @@ export type AgentEvent =
   | ToolLimitEvent
   | ContextClearedEvent
   | AnswerStartEvent
+  | TokenEvent
   | DoneEvent;
 
 /**
