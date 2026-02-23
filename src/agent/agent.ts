@@ -1,6 +1,6 @@
 import { AIMessage } from '@langchain/core/messages';
 import { StructuredToolInterface } from '@langchain/core/tools';
-import { callLlm } from '../model/llm.js';
+import { callLlm, callLlmWithStreaming } from '../model/llm.js';
 import { getTools } from '../tools/registry.js';
 import { buildSystemPrompt, buildIterationPrompt, buildFinalAnswerPrompt } from '../agent/prompts.js';
 import { extractTextContent, hasToolCalls } from '../utils/ai-message.js';
@@ -10,6 +10,7 @@ import type { AgentConfig, AgentEvent, ContextClearedEvent, TokenUsage } from '.
 import { createRunContext, type RunContext } from './run-context.js';
 import { buildFinalAnswerContext } from './final-answer-context.js';
 import { AgentToolExecutor } from './tool-executor.js';
+import { isStreamingEnabled } from '../streaming/terminal-detection.js';
 
 
 const DEFAULT_MODEL = 'gpt-5.2';
@@ -26,6 +27,7 @@ export class Agent {
   private readonly toolExecutor: AgentToolExecutor;
   private readonly systemPrompt: string;
   private readonly signal?: AbortSignal;
+  private readonly streamingEnabled: boolean;
 
   private constructor(
     config: AgentConfig,
@@ -39,6 +41,8 @@ export class Agent {
     this.toolExecutor = new AgentToolExecutor(this.toolMap, config.signal, config.requestToolApproval, config.sessionApprovedTools);
     this.systemPrompt = systemPrompt;
     this.signal = config.signal;
+    // Use config setting, or auto-detect from terminal
+    this.streamingEnabled = config.streamingEnabled ?? isStreamingEnabled();
   }
 
   /**
@@ -144,6 +148,13 @@ export class Agent {
       signal: this.signal,
     });
     return { response: result.response, usage: result.usage };
+  }
+
+  /**
+   * Check if streaming is enabled for this agent
+   */
+  isStreamingEnabled(): boolean {
+    return this.streamingEnabled;
   }
 
   /**

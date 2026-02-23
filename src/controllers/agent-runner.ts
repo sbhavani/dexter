@@ -8,6 +8,7 @@ import type {
 } from '../agent/index.js';
 import type { DisplayEvent } from '../agent/types.js';
 import type { HistoryItem, HistoryItemStatus, WorkingState } from '../types.js';
+import { StreamController, ANSIStreamRenderer, isStreamingEnabled } from '../streaming/index.js';
 
 type ChangeListener = () => void;
 
@@ -26,6 +27,9 @@ export class AgentRunnerController {
   private abortController: AbortController | null = null;
   private approvalResolve: ((decision: ApprovalDecision) => void) | null = null;
   private sessionApprovedTools = new Set<string>();
+  private readonly streamController: StreamController;
+  private readonly streamRenderer: ANSIStreamRenderer | null;
+  private readonly useStreaming: boolean;
 
   constructor(
     agentConfig: AgentConfig,
@@ -35,6 +39,11 @@ export class AgentRunnerController {
     this.agentConfig = agentConfig;
     this.inMemoryChatHistory = inMemoryChatHistory;
     this.onChange = onChange;
+
+    // Initialize streaming if enabled
+    this.useStreaming = isStreamingEnabled();
+    this.streamController = new StreamController();
+    this.streamRenderer = this.useStreaming ? new ANSIStreamRenderer(this.streamController) : null;
   }
 
   get history(): HistoryItem[] {
@@ -166,6 +175,12 @@ export class AgentRunnerController {
           completed: true,
         });
         break;
+      case 'thinking_delta':
+        // Handle streaming thinking delta
+        if (this.useStreaming && this.streamRenderer) {
+          this.streamRenderer.renderThinking(event.delta);
+        }
+        break;
       case 'tool_start': {
         const toolId = `tool-${event.tool}-${Date.now()}`;
         this.workingStateValue = { status: 'tool', toolName: event.tool };
@@ -195,6 +210,12 @@ export class AgentRunnerController {
         this.finishToolEvent(event);
         this.workingStateValue = { status: 'thinking' };
         break;
+      case 'tool_result_delta':
+        // Handle streaming tool result delta
+        if (this.useStreaming && this.streamRenderer) {
+          this.streamRenderer.renderToolResult(event.delta);
+        }
+        break;
       case 'tool_error':
         this.finishToolEvent(event);
         this.workingStateValue = { status: 'thinking' };
@@ -223,9 +244,23 @@ export class AgentRunnerController {
         break;
       case 'answer_start':
         this.workingStateValue = { status: 'answering', startTime: Date.now() };
+        // Render thinking prefix if streaming
+        if (this.useStreaming && this.streamRenderer) {
+          this.streamRenderer.renderAnswerPrefix();
+        }
+        break;
+      case 'answer_delta':
+        // Handle streaming answer delta
+        if (this.useStreaming && this.streamRenderer) {
+          this.streamRenderer.renderAnswer(event.delta);
+        }
         break;
       case 'done': {
         const done = event as DoneEvent;
+        // Flush any remaining streaming content
+        if (this.useStreaming) {
+          this.streamController.flushAll();
+        }
         if (done.answer) {
           await this.inMemoryChatHistory.saveAnswer(done.answer).catch(() => {});
         }

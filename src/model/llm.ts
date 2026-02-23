@@ -7,7 +7,7 @@ import { ChatPromptTemplate } from '@langchain/core/prompts';
 import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { StructuredToolInterface } from '@langchain/core/tools';
-import { Runnable } from '@langchain/core/runnables';
+import { Runnable, RunnableConfig } from '@langchain/core/runnables';
 import { z } from 'zod';
 import { DEFAULT_SYSTEM_PROMPT } from '@/agent/prompts';
 import type { TokenUsage } from '@/agent/types';
@@ -234,4 +234,82 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
     return { response: (result as { content: string }).content, usage };
   }
   return { response: result as AIMessage, usage };
+}
+
+/**
+ * Callback type for streaming LLM chunks
+ */
+export type StreamingCallback = (chunk: string) => void | Promise<void>;
+
+/**
+ * Call LLM with streaming enabled.
+ * The callback is invoked for each chunk of the response.
+ */
+export async function callLlmWithStreaming(
+  prompt: string,
+  options: CallLlmOptions & { streamingCallback: StreamingCallback }
+): Promise<LlmResult> {
+  const { model = DEFAULT_MODEL, systemPrompt, outputSchema, tools, signal, streamingCallback } = options;
+  const finalSystemPrompt = systemPrompt || DEFAULT_SYSTEM_PROMPT;
+
+  // Enable streaming
+  const llm = getChatModel(model, true);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let runnable: Runnable<any, any> = llm;
+
+  if (outputSchema) {
+    runnable = llm.withStructuredOutput(outputSchema, { strict: false });
+  } else if (tools && tools.length > 0 && llm.bindTools) {
+    runnable = llm.bindTools(tools);
+  }
+
+  const invokeOpts: RunnableConfig = signal ? { signal } : {};
+  const provider = resolveProvider(model);
+
+  // Use a simple approach: collect chunks via streaming
+  // We'll build the response incrementally
+  let fullContent = '';
+  let usage: TokenUsage | undefined;
+
+  try {
+    if (provider.id === 'anthropic') {
+      // Anthropic: use explicit messages with cache_control
+      const messages = buildAnthropicMessages(finalSystemPrompt, prompt);
+      // For streaming, we need to handle it differently
+      const stream = await runnable.stream(messages, invokeOpts);
+      for await (const chunk of stream) {
+        const content = typeof chunk === 'string' ? chunk : (chunk as { content?: string }).content || '';
+        if (content) {
+          fullContent += content;
+          await streamingCallback(content);
+        }
+      }
+    } else {
+      // Other providers
+      const promptTemplate = ChatPromptTemplate.fromMessages([
+        ['system', finalSystemPrompt],
+        ['user', '{prompt}'],
+      ]);
+      const chain = promptTemplate.pipe(runnable);
+      const stream = await chain.stream({ prompt }, invokeOpts);
+      for await (const chunk of stream) {
+        const content = typeof chunk === 'string' ? chunk : (chunk as { content?: string }).content || '';
+        if (content) {
+          fullContent += content;
+          await streamingCallback(content);
+        }
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw error;
+    }
+    // If streaming fails, fall back to non-streaming
+    logger.warn(`[LLM] Streaming failed, falling back to non-streaming: ${error instanceof Error ? error.message : String(error)}`);
+    return callLlm(prompt, { model, systemPrompt: finalSystemPrompt, outputSchema, tools, signal });
+  }
+
+  // Return the accumulated result
+  return { response: fullContent, usage };
 }
