@@ -65,3 +65,15 @@ export const editorTheme: EditorTheme = {
   borderColor: (text) => theme.border(text),
   selectList: selectListTheme,
 };
+
+// Streaming-specific theme colors
+export const streamingTheme = {
+  // Thinking content - dim cyan
+  thinking: (text: string) => chalk.dim.cyan(text),
+  // Tool content - yellow
+  tool: (text: string) => chalk.yellow(text),
+  // Answer content - white
+  answer: (text: string) => chalk.white(text),
+  // Streaming indicator
+  indicator: (text: string) => chalk.dim(text),
+};

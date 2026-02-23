@@ -1,12 +1,14 @@
 import { AIMessage } from '@langchain/core/messages';
 import { StructuredToolInterface } from '@langchain/core/tools';
-import { callLlm } from '../model/llm.js';
+import { callLlm, callLlmStream } from '../model/llm.js';
 import { getTools } from '../tools/registry.js';
 import { buildSystemPrompt, buildIterationPrompt, buildFinalAnswerPrompt } from '../agent/prompts.js';
 import { extractTextContent, hasToolCalls } from '../utils/ai-message.js';
 import { InMemoryChatHistory } from '../utils/in-memory-chat-history.js';
 import { estimateTokens, CONTEXT_THRESHOLD, KEEP_TOOL_USES } from '../utils/tokens.js';
-import type { AgentConfig, AgentEvent, ContextClearedEvent, TokenUsage } from '../agent/types.js';
+import { isStreamingEnabled } from '../utils/env.js';
+import type { AgentConfig, AgentEvent, ContextClearedEvent, TokenUsage, StreamingConfig } from '../agent/types.js';
+import { DEFAULT_STREAMING_CONFIG } from '../agent/types.js';
 import { createRunContext, type RunContext } from './run-context.js';
 import { buildFinalAnswerContext } from './final-answer-context.js';
 import { AgentToolExecutor } from './tool-executor.js';
@@ -26,6 +28,7 @@ export class Agent {
   private readonly toolExecutor: AgentToolExecutor;
   private readonly systemPrompt: string;
   private readonly signal?: AbortSignal;
+  private readonly streaming: StreamingConfig;
 
   private constructor(
     config: AgentConfig,
@@ -39,6 +42,12 @@ export class Agent {
     this.toolExecutor = new AgentToolExecutor(this.toolMap, config.signal, config.requestToolApproval, config.sessionApprovedTools);
     this.systemPrompt = systemPrompt;
     this.signal = config.signal;
+    // Default streaming config based on environment variable
+    const streamingEnabled = isStreamingEnabled();
+    this.streaming = config.streaming ?? {
+      ...DEFAULT_STREAMING_CONFIG,
+      enabled: streamingEnabled,
+    };
   }
 
   /**
@@ -58,6 +67,7 @@ export class Agent {
    */
   async *run(query: string, inMemoryHistory?: InMemoryChatHistory): AsyncGenerator<AgentEvent> {
     const startTime = Date.now();
+    const useStreaming = this.streaming.enabled;
 
     if (this.tools.length === 0) {
       yield { type: 'done', answer: 'No tools available. Please check your API key configuration.', toolCalls: [], iterations: 0, totalTime: Date.now() - startTime };
@@ -73,7 +83,20 @@ export class Agent {
     while (ctx.iteration < this.maxIterations) {
       ctx.iteration++;
 
-      const { response, usage } = await this.callModel(currentPrompt);
+      let response: AIMessage | string;
+      let usage: TokenUsage | undefined;
+
+      if (useStreaming) {
+        // For streaming, iterate through token events and collect the final result
+        const result = await this.callModelStreaming(currentPrompt, ctx);
+        response = result.response;
+        usage = result.usage;
+      } else {
+        const result = await this.callModel(currentPrompt);
+        response = result.response;
+        usage = result.usage;
+      }
+
       ctx.tokenCounter.add(usage);
       const responseText = typeof response === 'string' ? response : extractTextContent(response);
 
@@ -147,6 +170,48 @@ export class Agent {
   }
 
   /**
+   * Call the LLM with streaming and yield token events.
+   */
+  private async *callModelStreaming(prompt: string, ctx: RunContext): AsyncGenerator<AgentEvent, { response: AIMessage | string; usage?: TokenUsage }, unknown> {
+    if (!this.streaming.showThinking) {
+      // If thinking streaming is disabled, use regular call
+      return this.callModel(prompt);
+    }
+
+    let fullContent = '';
+    const tokenType: 'thinking' | 'answer' = 'thinking';
+
+    try {
+      for await (const chunk of callLlmStream(prompt, {
+        model: this.model,
+        systemPrompt: this.systemPrompt,
+        tools: this.tools,
+        signal: this.signal,
+        streaming: true,
+      })) {
+        fullContent += chunk.content;
+
+        // Yield token event for streaming
+        yield {
+          type: 'token',
+          tokenType,
+          content: chunk.content,
+          isComplete: chunk.done,
+          timestamp: Date.now(),
+        };
+      }
+    } catch (error) {
+      // If streaming fails, fall back to regular call
+      const result = await this.callModel(prompt);
+      return result;
+    }
+
+    // Return the accumulated content as response
+    // Note: We can't get usage from streaming, so approximate
+    return { response: fullContent, usage: undefined };
+  }
+
+  /**
    * Generate final answer with full scratchpad context.
    */
   private async *handleDirectResponse(
@@ -177,11 +242,40 @@ export class Agent {
     const finalPrompt = buildFinalAnswerPrompt(ctx.query, fullContext);
 
     yield { type: 'answer_start' };
-    const { response, usage } = await this.callModel(finalPrompt, false);
-    ctx.tokenCounter.add(usage);
-    const answer = typeof response === 'string'
-      ? response
-      : extractTextContent(response);
+
+    const useStreaming = this.streaming.enabled;
+
+    let answer: string;
+    let usage: TokenUsage | undefined;
+
+    if (useStreaming) {
+      // Stream the final answer tokens
+      let fullContent = '';
+      for await (const chunk of callLlmStream(finalPrompt, {
+        model: this.model,
+        systemPrompt: this.systemPrompt,
+        streaming: true,
+      })) {
+        fullContent += chunk.content;
+
+        // Yield token event for streaming answer
+        yield {
+          type: 'token',
+          tokenType: 'answer',
+          content: chunk.content,
+          isComplete: chunk.done,
+          timestamp: Date.now(),
+        };
+      }
+      answer = fullContent;
+    } else {
+      const result = await this.callModel(finalPrompt, false);
+      usage = result.usage;
+      ctx.tokenCounter.add(usage);
+      answer = typeof result.response === 'string'
+        ? result.response
+        : extractTextContent(result.response);
+    }
 
     const totalTime = Date.now() - ctx.startTime;
     yield {

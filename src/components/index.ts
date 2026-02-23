@@ -14,3 +14,4 @@ export {
 export { ToolEventComponent } from './tool-event.js';
 export { UserQueryComponent } from './user-query.js';
 export { WorkingIndicatorComponent } from './working-indicator.js';
+export { StreamingRenderer, createStreamingRenderer } from './streaming-renderer.js';
