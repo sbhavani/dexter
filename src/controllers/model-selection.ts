@@ -73,6 +73,25 @@ export class ModelSelectionController {
     return this.chatHistory;
   }
 
+  /**
+   * Gets the current model ID and provider for session persistence
+   */
+  getModelInfo(): { model: string; provider: string } {
+    return {
+      model: this.modelValue,
+      provider: this.providerValue,
+    };
+  }
+
+  /**
+   * Restores model and provider from a session
+   */
+  restoreFromSession(model: string, provider: string): void {
+    this.providerValue = provider;
+    this.modelValue = model;
+    this.chatHistory.setModel(model);
+  }
+
   isInSelectionFlow(): boolean {
     return this.appStateValue !== 'idle';
   }
