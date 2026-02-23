@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "workflow_type": "feature",
+  "phase": "DEV_IMPLEMENT",
+  "feature": {
+    "feature": "Implement session persistence: save conversation history to ",
+    "description": "Implement session persistence: save conversation history to disk and allow resuming previous sessions with --session <id> flag.",
+    "rationale": "Manually specified via --feature flag",
+    "priority": "P1"
+  },
+  "pm_session": null,
+  "dev_session": "c445a967-4072-41a4-8fd3-2b1fef2c7390",
+  "pr_url": null,
+  "branch_name": "agent-worktree-20260222-183246-dc2c6e",
+  "worker_handoff": false,
+  "original_path": "/Users/sb/code/dexter",
+  "worktree_path": "/var/folders/yl/x7v44_357r1ck73mr69d_lzc0000gn/T/agent-team-dexter-20260222-183246-dc2c6e",
+  "thread_root_id": null,
+  "started_at": "2026-02-23T00:46:57.552380+00:00",
+  "updated_at": "2026-02-23T00:54:13.238241+00:00"
+}

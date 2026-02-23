@@ -221,4 +221,17 @@ Select which previous messages are relevant to understanding or answering the cu
     this.messages = [];
     this.relevantMessagesByQuery.clear();
   }
+
+  /**
+   * Restores messages from a session (for session persistence)
+   */
+  restoreMessages(sessionMessages: { id: number; query: string; answer: string | null; summary: string | null }[]): void {
+    this.messages = sessionMessages.map((m) => ({
+      id: m.id,
+      query: m.query,
+      answer: m.answer,
+      summary: m.summary,
+    }));
+    this.relevantMessagesByQuery.clear();
+  }
 }

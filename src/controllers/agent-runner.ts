@@ -1,5 +1,5 @@
 import { Agent } from '../agent/agent.js';
-import type { InMemoryChatHistory } from '../utils/in-memory-chat-history.js';
+import type { InMemoryChatHistory, Message } from '../utils/in-memory-chat-history.js';
 import type {
   AgentConfig,
   AgentEvent,
@@ -8,6 +8,7 @@ import type {
 } from '../agent/index.js';
 import type { DisplayEvent } from '../agent/types.js';
 import type { HistoryItem, HistoryItemStatus, WorkingState } from '../types.js';
+import type { SessionMessage } from '../utils/session-store.js';
 
 type ChangeListener = () => void;
 
@@ -57,6 +58,62 @@ export class AgentRunnerController {
     return (
       this.historyValue.length > 0 && this.historyValue[this.historyValue.length - 1]?.status === 'processing'
     );
+  }
+
+  /**
+   * Gets the approved tools set for session persistence
+   */
+  getApprovedTools(): string[] {
+    return Array.from(this.sessionApprovedTools);
+  }
+
+  /**
+   * Restores approved tools from a session
+   */
+  restoreApprovedTools(tools: string[]): void {
+    this.sessionApprovedTools = new Set(tools);
+  }
+
+  /**
+   * Gets the current messages in InMemoryChatHistory for session persistence
+   */
+  getMessages(): SessionMessage[] {
+    const messages = this.inMemoryChatHistory.getMessages();
+    return messages.map((m: Message) => ({
+      id: m.id,
+      query: m.query,
+      answer: m.answer,
+      summary: m.summary,
+    }));
+  }
+
+  /**
+   * Restores InMemoryChatHistory from a session
+   */
+  restoreMessages(messages: SessionMessage[]): void {
+    // We need to restore the messages directly to the internal state
+    // The InMemoryChatHistory has a clear() method, but we need to add messages back
+    // Since there's no "restore" method, we'll access the internal messages array via the chatHistory
+    // Actually, let's create a new InMemoryChatHistory and replace the reference
+    // But we can't do that easily. Instead, let's add messages one by one
+
+    // Actually the simplest approach is to clear and manually rebuild
+    // But we don't have access to internal state. Let's just use the model's approach
+    // We'll call the private method indirectly through the controller
+
+    // Better approach: add a method to InMemoryChatHistory to restore messages
+    // For now, let's just clear and use the model's getMessages which returns the array
+    // Wait - the model is set in the constructor, we can't easily swap it
+
+    // Actually, let's just reinitialize the chat history with the messages
+    // The cleanest way is to add a restore method to InMemoryChatHistory
+    // For now, let's skip this and handle it differently in cli.ts
+
+    // Actually - we CAN access the inMemoryChatHistory, let's see if we can just
+    // create a new instance and pass it. But the reference is already passed to Agent
+
+    // Let's add a method to InMemoryChatHistory instead
+    this.inMemoryChatHistory.restoreMessages(messages);
   }
 
   setError(error: string | null) {

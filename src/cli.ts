@@ -29,6 +29,8 @@ import {
   createProviderSelector,
 } from './components/index.js';
 import { editorTheme, theme } from './theme.js';
+import { SessionStore, type Session } from './utils/session-store.js';
+import type { HistoryItem } from './types.js';
 
 function truncateAtWord(str: string, maxLength: number): string {
   if (str.length <= maxLength) {
@@ -89,6 +91,20 @@ function createScreen(
     container.addChild(new Text(theme.muted(footer), 0, 0));
   }
   return container;
+}
+
+/**
+ * Converts session messages to HistoryItem[] for UI display
+ */
+function restoreHistoryItems(messages: { id: number; query: string; answer: string | null }[]): HistoryItem[] {
+  return messages.map((msg) => ({
+    id: String(msg.id),
+    query: msg.query,
+    events: [],
+    answer: msg.answer ?? '',
+    status: msg.answer ? 'complete' as const : 'processing' as const,
+    startTime: msg.id,
+  }));
 }
 
 function renderHistory(chatLog: ChatLogComponent, history: AgentRunnerController['history']) {
@@ -163,12 +179,21 @@ function renderHistory(chatLog: ChatLogComponent, history: AgentRunnerController
   }
 }
 
-export async function runCli() {
+export async function runCli(session?: Session | null) {
   const tui = new TUI(new ProcessTerminal());
   const root = new Container();
   const chatLog = new ChatLogComponent(tui);
   const inputHistory = new InputHistoryController(() => tui.requestRender());
+  const sessionStore = new SessionStore();
   let lastError: string | null = null;
+
+  // Handle session restoration
+  let currentSession: Session | null = session ?? null;
+  if (!currentSession) {
+    // Create new session
+    const modelInfo = { model: 'claude-sonnet-4-20250514', provider: 'anthropic' }; // Will be updated after modelSelection
+    currentSession = await sessionStore.createSession(modelInfo.model, modelInfo.provider);
+  }
 
   const onError = (message: string) => {
     lastError = message;
@@ -192,6 +217,32 @@ export async function runCli() {
       tui.requestRender();
     },
   );
+
+  // Restore session if provided
+  if (session) {
+    // Restore model/provider
+    modelSelection.restoreFromSession(session.model, session.provider);
+
+    // Restore chat history
+    if (session.messages.length > 0) {
+      agentRunner.restoreMessages(session.messages);
+      // Restore UI history from session messages
+      const historyItems = restoreHistoryItems(
+        session.messages.map((m) => ({ id: m.id, query: m.query, answer: m.answer })),
+      );
+      for (const item of historyItems) {
+        chatLog.addQuery(item.query);
+        if (item.answer) {
+          chatLog.finalizeAnswer(item.answer);
+        }
+      }
+    }
+
+    // Restore approved tools
+    if (session.approvedTools.length > 0) {
+      agentRunner.restoreApprovedTools(session.approvedTools);
+    }
+  }
 
   const intro = new IntroComponent(modelSelection.model);
   const errorText = new Text('', 0, 0);
@@ -228,6 +279,16 @@ export async function runCli() {
     if (result?.answer) {
       await inputHistory.updateAgentResponse(result.answer);
     }
+
+    // Save session after query completes
+    const modelInfo = modelSelection.getModelInfo();
+    await sessionStore.updateSession(
+      agentRunner.getMessages(),
+      agentRunner.getApprovedTools(),
+      modelInfo.model,
+      modelInfo.provider,
+    );
+
     refreshError();
     tui.requestRender();
   };
