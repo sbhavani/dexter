@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "workflow_type": "feature",
+  "phase": "DEV_IMPLEMENT",
+  "feature": {
+    "feature": "Add portfolio analysis capability: accept multiple stock tic",
+    "description": "Add portfolio analysis capability: accept multiple stock tickers and generate comparative analysis including relative performance, risk metrics, and correlation coefficients.",
+    "rationale": "Manually specified via --feature flag",
+    "priority": "P1"
+  },
+  "pm_session": null,
+  "dev_session": "6f3f5511-f3ab-442a-a106-c917e574e554",
+  "pr_url": null,
+  "branch_name": "1-portfolio-analysis",
+  "worker_handoff": false,
+  "original_path": "/Users/sb/code/dexter",
+  "worktree_path": "/var/folders/yl/x7v44_357r1ck73mr69d_lzc0000gn/T/agent-team-dexter-20260222-203336-e8c2c8",
+  "thread_root_id": null,
+  "started_at": "2026-02-23T02:36:02.988545+00:00",
+  "updated_at": "2026-02-23T02:53:00.679937+00:00"
+}

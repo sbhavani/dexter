@@ -12,3 +12,7 @@ export { createFinancialSearch } from './financial-search.js';
 export { createFinancialMetrics } from './financial-metrics.js';
 export { createReadFilings } from './read-filings.js';
 
+// Portfolio analysis exports
+export { analyzePortfolio } from '../../portfolio/index.js';
+export type { PortfolioAnalysis, PortfolioCLIOptions } from '../../portfolio/types.js';
+
